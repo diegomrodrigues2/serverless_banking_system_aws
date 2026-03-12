@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "double-entry-ledger"
+version = "0.1.0"
+description = "Sistema de subledger distribuído baseado em partidas dobradas (Double-Entry Bookkeeping)"
+requires-python = ">=3.11"
+dependencies = [
+    "boto3>=1.34",
+    "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "hypothesis>=6.100",
+    # Testes de integração com DynamoDB Local
+    "boto3>=1.34",
+    "pytest-timeout>=2.3",
+    # Testes de integração local (S3/AppConfig mockados)
+    "moto[s3,appconfig]>=5.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: testes unitários do domínio e camadas de aplicação",
+    "property: testes baseados em propriedades usando Hypothesis",
+    "integration: testes de integração com DynamoDB Local via Finch",
+    "integration_local: testes de integração local (moto, DynamoDB Local, tempdir)",
+    "integration_aws_dev: testes de integração contra AWS dev (requer credenciais e recursos reais)",
+    "slow: testes lentos que podem ser excluídos em execuções rápidas",
+]
+addopts = "--strict-markers"
+
+# Variáveis de ambiente para testes de integração AWS dev:
+#   VALIDATION_ENGINE_TEST_BUCKET   — bucket S3 de teste (obrigatório para integration_aws_dev)
+#   VALIDATION_ENGINE_TEST_PREFIX   — prefixo base (padrão: "test/")
+#   VALIDATION_ENGINE_TEST_APPCONFIG_APP — aplicação AppConfig de teste
+#   VALIDATION_ENGINE_TEST_DYNAMODB_TABLE — tabela DynamoDB de teste
+#   AWS_REGION                      — região AWS (padrão: us-east-1)
+#   HYPOTHESIS_PROFILE              — perfil Hypothesis (validation_local | validation_ci | default | ci)
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["ledger*", "validation_engine*"]

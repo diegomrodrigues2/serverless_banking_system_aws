@@ -1,0 +1,881 @@
+{
+  "info": {
+    "_postman_id": "double-entry-ledger-v1",
+    "name": "Double-Entry Ledger API",
+    "description": "Testes completos da API do Double-Entry Ledger (AWS Serverless Banking).\n\nEndpoints:\n- POST /entries   — cria lançamento contábil\n- POST /reversals — cria reversão de lançamento\n- GET  /balances/{account_id}  — consulta saldo\n- GET  /statements/{account_id} — extrato paginado\n\nAmbientes disponíveis: local, dev",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "entry_id",
+      "value": "",
+      "description": "Preenchido automaticamente após POST /entries"
+    },
+    {
+      "key": "external_id",
+      "value": "",
+      "description": "Preenchido automaticamente após POST /entries"
+    }
+  ],
+  "item": [
+    {
+      "name": "Entries",
+      "item": [
+        {
+          "name": "POST /entries — Criar lançamento válido (BRL)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Gera external_id único para garantir idempotência",
+                  "pm.collectionVariables.set('external_id', pm.variables.replaceIn('{{$guid}}'));"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "pm.test('Resposta tem status success', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.status).to.eql('success');",
+                  "});",
+                  "",
+                  "pm.test('data contém entry_id', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data).to.have.property('entry_id');",
+                  "  pm.collectionVariables.set('entry_id', body.data.entry_id);",
+                  "  // Salva o external_id do primeiro POST para o teste de idempotência",
+                  "  pm.collectionVariables.set('first_external_id', pm.collectionVariables.get('external_id'));",
+                  "});",
+                  "",
+                  "pm.test('entry_type é STANDARD', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.entry_type).to.eql('STANDARD');",
+                  "});",
+                  "",
+                  "pm.test('postings têm 2 itens', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.postings).to.have.lengthOf(2);",
+                  "});",
+                  "",
+                  "pm.test('metadata contém request_id', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.metadata).to.have.property('request_id');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"external_id\": \"{{external_id}}\",\n  \"postings\": [\n    {\n      \"account_id\": \"acc_customer_001\",\n      \"amount\": 10000,\n      \"currency\": \"BRL\",\n      \"direction\": \"DEBIT\"\n    },\n    {\n      \"account_id\": \"acc_revenue_001\",\n      \"amount\": 10000,\n      \"currency\": \"BRL\",\n      \"direction\": \"CREDIT\"\n    }\n  ],\n  \"metadata\": {\n    \"order_id\": \"order-001\",\n    \"description\": \"Pagamento de pedido\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/entries",
+              "host": ["{{base_url}}"],
+              "path": ["entries"]
+            }
+          }
+        },
+        {
+          "name": "POST /entries — Criar lançamento multi-moeda (USD + BRL)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('external_id', pm.variables.replaceIn('{{$guid}}'));"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('4 postings (2 moedas)', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.postings).to.have.lengthOf(4);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"external_id\": \"{{external_id}}\",\n  \"postings\": [\n    { \"account_id\": \"acc_a\", \"amount\": 5000, \"currency\": \"BRL\", \"direction\": \"DEBIT\" },\n    { \"account_id\": \"acc_b\", \"amount\": 5000, \"currency\": \"BRL\", \"direction\": \"CREDIT\" },\n    { \"account_id\": \"acc_a\", \"amount\": 1000, \"currency\": \"USD\", \"direction\": \"DEBIT\" },\n    { \"account_id\": \"acc_b\", \"amount\": 1000, \"currency\": \"USD\", \"direction\": \"CREDIT\" }\n  ],\n  \"metadata\": { \"description\": \"Lançamento multi-moeda\" }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/entries",
+              "host": ["{{base_url}}"],
+              "path": ["entries"]
+            }
+          }
+        },
+        {
+          "name": "POST /entries — Idempotência (mesmo external_id)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200 (idempotente)', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('data.idempotent é true', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.idempotent).to.be.true;",
+                  "});",
+                  "",
+                  "pm.test('entry_id retornado é o mesmo', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.entry_id).to.eql(pm.collectionVariables.get('entry_id'));",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"external_id\": \"{{first_external_id}}\",\n  \"postings\": [\n    { \"account_id\": \"acc_customer_001\", \"amount\": 10000, \"currency\": \"BRL\", \"direction\": \"DEBIT\" },\n    { \"account_id\": \"acc_revenue_001\", \"amount\": 10000, \"currency\": \"BRL\", \"direction\": \"CREDIT\" }\n  ],\n  \"metadata\": {}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/entries",
+              "host": ["{{base_url}}"],
+              "path": ["entries"]
+            }
+          }
+        },
+        {
+          "name": "POST /entries — ERRO: zero-sum violation",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": ["pm.collectionVariables.set('external_id', pm.variables.replaceIn('{{$guid}}'));"],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error.code é ZERO_SUM_VIOLATION', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.code).to.eql('ZERO_SUM_VIOLATION');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"external_id\": \"{{external_id}}\",\n  \"postings\": [\n    { \"account_id\": \"acc_a\", \"amount\": 10000, \"currency\": \"BRL\", \"direction\": \"DEBIT\" },\n    { \"account_id\": \"acc_b\", \"amount\": 5000, \"currency\": \"BRL\", \"direction\": \"CREDIT\" }\n  ],\n  \"metadata\": {}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/entries",
+              "host": ["{{base_url}}"],
+              "path": ["entries"]
+            }
+          }
+        },
+        {
+          "name": "POST /entries — ERRO: amount float rejeitado",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": ["pm.collectionVariables.set('external_id', pm.variables.replaceIn('{{$guid}}'));"],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error.code é SCHEMA_VALIDATION_ERROR', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.code).to.eql('SCHEMA_VALIDATION_ERROR');",
+                  "  pm.expect(body.error.message).to.include('float');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"external_id\": \"{{external_id}}\",\n  \"postings\": [\n    { \"account_id\": \"acc_a\", \"amount\": 100.50, \"currency\": \"BRL\", \"direction\": \"DEBIT\" },\n    { \"account_id\": \"acc_b\", \"amount\": 100.50, \"currency\": \"BRL\", \"direction\": \"CREDIT\" }\n  ],\n  \"metadata\": {}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/entries",
+              "host": ["{{base_url}}"],
+              "path": ["entries"]
+            }
+          }
+        },
+        {
+          "name": "POST /entries — ERRO: amount bool rejeitado",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": ["pm.collectionVariables.set('external_id', pm.variables.replaceIn('{{$guid}}'));"],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error.code é SCHEMA_VALIDATION_ERROR', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.code).to.eql('SCHEMA_VALIDATION_ERROR');",
+                  "  pm.expect(body.error.message).to.include('bool');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"external_id\": \"{{external_id}}\",\n  \"postings\": [\n    { \"account_id\": \"acc_a\", \"amount\": true, \"currency\": \"BRL\", \"direction\": \"DEBIT\" },\n    { \"account_id\": \"acc_b\", \"amount\": true, \"currency\": \"BRL\", \"direction\": \"CREDIT\" }\n  ],\n  \"metadata\": {}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/entries",
+              "host": ["{{base_url}}"],
+              "path": ["entries"]
+            }
+          }
+        },
+        {
+          "name": "POST /entries — ERRO: external_id ausente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error menciona external_id', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.message).to.include('external_id');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"postings\": [\n    { \"account_id\": \"acc_a\", \"amount\": 1000, \"currency\": \"BRL\", \"direction\": \"DEBIT\" },\n    { \"account_id\": \"acc_b\", \"amount\": 1000, \"currency\": \"BRL\", \"direction\": \"CREDIT\" }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/entries",
+              "host": ["{{base_url}}"],
+              "path": ["entries"]
+            }
+          }
+        },
+        {
+          "name": "POST /entries — ERRO: postings vazio",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": ["pm.collectionVariables.set('external_id', pm.variables.replaceIn('{{$guid}}'));"],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error menciona postings', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.message).to.include('postings');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"external_id\": \"{{external_id}}\",\n  \"postings\": [],\n  \"metadata\": {}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/entries",
+              "host": ["{{base_url}}"],
+              "path": ["entries"]
+            }
+          }
+        },
+        {
+          "name": "POST /entries — ERRO: body inválido (JSON malformado)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error.code é INVALID_JSON', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.code).to.eql('INVALID_JSON');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{ invalid json }"
+            },
+            "url": {
+              "raw": "{{base_url}}/entries",
+              "host": ["{{base_url}}"],
+              "path": ["entries"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reversals",
+      "item": [
+        {
+          "name": "POST /reversals — Reverter lançamento existente",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Usa o entry_id salvo pelo teste de criação",
+                  "const entryId = pm.collectionVariables.get('entry_id');",
+                  "if (!entryId) { throw new Error('entry_id não encontrado. Execute POST /entries primeiro.'); }",
+                  "pm.collectionVariables.set('reversal_external_id', pm.variables.replaceIn('{{$guid}}'));"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "pm.test('entry_type é REVERSAL', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.entry_type).to.eql('REVERSAL');",
+                  "});",
+                  "",
+                  "pm.test('postings têm direções invertidas', () => {",
+                  "  const body = pm.response.json();",
+                  "  const directions = body.data.postings.map(p => p.direction);",
+                  "  pm.expect(directions).to.include('DEBIT');",
+                  "  pm.expect(directions).to.include('CREDIT');",
+                  "});",
+                  "",
+                  "pm.test('data contém entry_id', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data).to.have.property('entry_id');",
+                  "  pm.collectionVariables.set('reversal_entry_id', body.data.entry_id);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"original_entry_id\": \"{{entry_id}}\",\n  \"external_id\": \"{{reversal_external_id}}\",\n  \"metadata\": {\n    \"reason\": \"Estorno solicitado pelo cliente\",\n    \"ticket_id\": \"ticket-001\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/reversals",
+              "host": ["{{base_url}}"],
+              "path": ["reversals"]
+            }
+          }
+        },
+        {
+          "name": "POST /reversals — Idempotência (mesmo external_id)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200 (idempotente)', () => pm.response.to.have.status(200));",
+                  "pm.test('data.idempotent é true', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.idempotent).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"original_entry_id\": \"{{entry_id}}\",\n  \"external_id\": \"{{reversal_external_id}}\",\n  \"metadata\": { \"reason\": \"Reenvio idempotente\" }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/reversals",
+              "host": ["{{base_url}}"],
+              "path": ["reversals"]
+            }
+          }
+        },
+        {
+          "name": "POST /reversals — ERRO: entry_id inexistente",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": ["pm.collectionVariables.set('reversal_external_id', pm.variables.replaceIn('{{$guid}}'));"],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('error.code é JOURNAL_ENTRY_NOT_FOUND', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.code).to.eql('JOURNAL_ENTRY_NOT_FOUND');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"original_entry_id\": \"entry-00000000-0000-0000-0000-000000000000\",\n  \"external_id\": \"{{reversal_external_id}}\",\n  \"metadata\": { \"reason\": \"Teste de entry inexistente\" }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/reversals",
+              "host": ["{{base_url}}"],
+              "path": ["reversals"]
+            }
+          }
+        },
+        {
+          "name": "POST /reversals — ERRO: original_entry_id ausente",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": ["pm.collectionVariables.set('reversal_external_id', pm.variables.replaceIn('{{$guid}}'));"],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error menciona original_entry_id', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.message).to.include('original_entry_id');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"external_id\": \"{{reversal_external_id}}\",\n  \"metadata\": {}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/reversals",
+              "host": ["{{base_url}}"],
+              "path": ["reversals"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Balances",
+      "item": [
+        {
+          "name": "GET /balances/{account_id} — Consultar saldo BRL",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('Resposta tem status success', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.status).to.eql('success');",
+                  "});",
+                  "",
+                  "pm.test('data contém account_id e currency', () => {",
+                  "  const body = pm.response.json();",
+                  "  if (body.data !== null) {",
+                  "    pm.expect(body.data.account_id).to.eql('acc_customer_001');",
+                  "    pm.expect(body.data.currency).to.eql('BRL');",
+                  "    pm.expect(body.data).to.have.property('balance_amount');",
+                  "    pm.expect(body.data).to.have.property('version');",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/balances/acc_customer_001?currency=BRL",
+              "host": ["{{base_url}}"],
+              "path": ["balances", "acc_customer_001"],
+              "query": [{ "key": "currency", "value": "BRL" }]
+            }
+          }
+        },
+        {
+          "name": "GET /balances/{account_id} — Conta sem saldo (data null)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('data é null para conta sem movimentação', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data).to.be.null;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/balances/acc_inexistente_xyz?currency=BRL",
+              "host": ["{{base_url}}"],
+              "path": ["balances", "acc_inexistente_xyz"],
+              "query": [{ "key": "currency", "value": "BRL" }]
+            }
+          }
+        },
+        {
+          "name": "GET /balances/{account_id} — ERRO: currency ausente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error.code é MISSING_PARAMETER', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.code).to.eql('MISSING_PARAMETER');",
+                  "  pm.expect(body.error.message).to.include('currency');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/balances/acc_customer_001",
+              "host": ["{{base_url}}"],
+              "path": ["balances", "acc_customer_001"]
+            }
+          }
+        },
+        {
+          "name": "GET /balances/{account_id} — ERRO: currency inválida (2 chars)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error.code é INVALID_PARAMETER', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.code).to.eql('INVALID_PARAMETER');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/balances/acc_customer_001?currency=BR",
+              "host": ["{{base_url}}"],
+              "path": ["balances", "acc_customer_001"],
+              "query": [{ "key": "currency", "value": "BR" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Statements",
+      "item": [
+        {
+          "name": "GET /statements/{account_id} — Primeira página (default page_size)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('Resposta tem status success', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.status).to.eql('success');",
+                  "});",
+                  "",
+                  "pm.test('data contém postings, next_cursor e has_more', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data).to.have.property('postings');",
+                  "  pm.expect(body.data).to.have.property('next_cursor');",
+                  "  pm.expect(body.data).to.have.property('has_more');",
+                  "  pm.expect(body.data.postings).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('metadata contém account_id e page_size', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.metadata.account_id).to.eql('acc_customer_001');",
+                  "  pm.expect(body.metadata.page_size).to.eql(20);",
+                  "});",
+                  "",
+                  "// Salva cursor para teste de paginação",
+                  "const body = pm.response.json();",
+                  "if (body.data.next_cursor) {",
+                  "  pm.collectionVariables.set('statement_cursor', body.data.next_cursor);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/statements/acc_customer_001",
+              "host": ["{{base_url}}"],
+              "path": ["statements", "acc_customer_001"]
+            }
+          }
+        },
+        {
+          "name": "GET /statements/{account_id} — Paginação com cursor",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('data.postings é array', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.postings).to.be.an('array');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/statements/acc_customer_001?cursor={{statement_cursor}}",
+              "host": ["{{base_url}}"],
+              "path": ["statements", "acc_customer_001"],
+              "query": [{ "key": "cursor", "value": "{{statement_cursor}}" }]
+            }
+          }
+        },
+        {
+          "name": "GET /statements/{account_id} — page_size customizado (5)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('metadata.page_size é 5', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.metadata.page_size).to.eql(5);",
+                  "});",
+                  "pm.test('postings tem no máximo 5 itens', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.postings.length).to.be.at.most(5);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/statements/acc_customer_001?page_size=5",
+              "host": ["{{base_url}}"],
+              "path": ["statements", "acc_customer_001"],
+              "query": [{ "key": "page_size", "value": "5" }]
+            }
+          }
+        },
+        {
+          "name": "GET /statements/{account_id} — ERRO: page_size acima do máximo (101)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error.code é INVALID_PARAMETER', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.code).to.eql('INVALID_PARAMETER');",
+                  "  pm.expect(body.error.message).to.include('100');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/statements/acc_customer_001?page_size=101",
+              "host": ["{{base_url}}"],
+              "path": ["statements", "acc_customer_001"],
+              "query": [{ "key": "page_size", "value": "101" }]
+            }
+          }
+        },
+        {
+          "name": "GET /statements/{account_id} — ERRO: page_size inválido (string)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('error.code é INVALID_PARAMETER', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.code).to.eql('INVALID_PARAMETER');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/statements/acc_customer_001?page_size=abc",
+              "host": ["{{base_url}}"],
+              "path": ["statements", "acc_customer_001"],
+              "query": [{ "key": "page_size", "value": "abc" }]
+            }
+          }
+        },
+        {
+          "name": "GET /statements/{account_id} — Conta sem movimentação",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('postings é array vazio', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.postings).to.be.an('array').that.is.empty;",
+                  "  pm.expect(body.data.has_more).to.be.false;",
+                  "  pm.expect(body.data.next_cursor).to.be.null;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/statements/acc_inexistente_xyz",
+              "host": ["{{base_url}}"],
+              "path": ["statements", "acc_inexistente_xyz"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

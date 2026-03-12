@@ -1,0 +1,26 @@
+version: "3.8"
+
+# DynamoDB Local para testes de integração do Double-Entry Ledger.
+#
+# Uso:
+#   docker-compose up -d          # inicia em background
+#   docker-compose down           # para e remove containers
+#
+# Flags do DynamoDB Local:
+#   -sharedDb:  usa um único arquivo de banco compartilhado entre todas as credenciais
+#   -inMemory:  armazena dados apenas em memória (sem persistência em disco)
+#               — ideal para testes: cada reinicialização começa com estado limpo
+
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: ledger-dynamodb-local
+    ports:
+      - "8000:8000"
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:8000 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
